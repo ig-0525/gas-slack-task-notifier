@@ -15,7 +15,10 @@ const CONFIG = {
       NO: 0, TASK_NAME: 3, START_DATE: 6, END_DATE: 7, STATUS: 8
     },
     STATUSES: {
+      // WBSシート - 終了日超過タスクで除外するステータス
       EXCLUDED_FOR_OVERDUE: ['終了', '対応不要', '延期'],
+
+      // WBSシート - 今週開始タスクで対象とするステータス
       TARGET_FOR_THIS_WEEK: ['未着手', '保留', '待機']
     }
   },
@@ -28,6 +31,7 @@ const CONFIG = {
       NO: 0, ENTRY_DATE: 4, ASSIGNEE: 5, CONTENT: 6, DUE_DATE: 7, STATUS: 8
     },
     STATUSES: {
+      // TODO管理シート - 除外するステータス（「完了」のみ）
       EXCLUDED: ['完了']
     }
   }
