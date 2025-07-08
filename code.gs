@@ -34,6 +34,19 @@ const CONFIG = {
       // TODO管理シート - 除外するステータス（「完了」のみ）
       EXCLUDED: ['完了']
     }
+  },
+
+  // 「課題管理」シートに関する設定
+  ISSUE: {
+    SHEET_NAME: '課題管理',
+    DATA_START_ROW: 3,
+    COLUMNS: {
+      NO: 0, ISSUE_CONTENT: 6, RESPONSE_CONTENT: 7, DUE_DATE: 8, STATUS: 9
+    },
+    STATUSES: {
+      // 課題管理シート - 除外するステータス（「解決」のみ）
+      EXCLUDED: ['解決']
+    }
   }
 };
 
@@ -45,6 +58,7 @@ function checkTasksAndNotifySlack() {
     const spreadsheet = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
     const wbsSheet = spreadsheet.getSheetByName(CONFIG.WBS.SHEET_NAME);
     const todoSheet = spreadsheet.getSheetByName(CONFIG.TODO.SHEET_NAME);
+    const issueSheet = spreadsheet.getSheetByName(CONFIG.ISSUE.SHEET_NAME);
 
     if (!wbsSheet) {
       Logger.log(`エラー: WBSシート '${CONFIG.WBS.SHEET_NAME}' が見つかりません。処理をスキップ。`);
@@ -57,6 +71,13 @@ function checkTasksAndNotifySlack() {
     } else {
       processTodoSheet(todoSheet);
     }
+
+    if (!issueSheet) {
+      Logger.log(`エラー: 課題管理シート '${CONFIG.ISSUE.SHEET_NAME}' が見つかりません。処理をスキップ。`);
+    } else {
+      processIssueSheet(issueSheet);
+    }
+
   } catch (e) {
     Logger.log('予期せぬエラーが発生しました: ' + e.toString());
   }
@@ -204,6 +225,77 @@ function processTodoSheet(sheet) {
     "*【TODO管理シート - 注意】未完了のタスクがあります！*",
     "", 
     [todoMessagesForSlack]
+  );
+  sendToSlack(messageForSlack);
+
+  Logger.log(`--- ${sheet.getName()} シートの処理が完了しました ---`);
+}
+
+/**
+ * 課題管理シートの処理を実行
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ */
+function processIssueSheet(sheet) {
+  Logger.log(`--- ${sheet.getName()} シートの処理を開始 ---`);
+
+  const spreadsheetUrl = `https://docs.google.com/spreadsheets/d/${CONFIG.SPREADSHEET_ID}/edit`;
+  const sheetId = sheet.getSheetId();
+  
+  const allData = sheet.getDataRange().getValues();
+  if (allData.length < CONFIG.ISSUE.DATA_START_ROW) {
+    Logger.log('課題管理シート: 抽出する課題が見つかりませんでした (データ行が少ない可能性があります)。');
+    return;
+  }
+
+  const extractedIssues = [];
+  for (let i = CONFIG.ISSUE.DATA_START_ROW - 1; i < allData.length; i++) {
+    const row = allData[i];
+    const issueContent = row[CONFIG.ISSUE.COLUMNS.ISSUE_CONTENT];
+    const status = String(row[CONFIG.ISSUE.COLUMNS.STATUS] || "").trim();
+
+    if (issueContent !== "" && !CONFIG.ISSUE.STATUSES.EXCLUDED.includes(status)) {
+      extractedIssues.push({ row: row, rowIndex: i + 1 });
+    }
+  }
+
+  if (extractedIssues.length === 0) {
+    Logger.log('課題管理シート: 未解決の課題はありませんでした。');
+    return;
+  }
+
+  const issueMessagesForLog = extractedIssues.map(item => {
+    const row = item.row;
+    const issueNo = row[CONFIG.ISSUE.COLUMNS.NO] || 'なし';
+    const issueContent = row[CONFIG.ISSUE.COLUMNS.ISSUE_CONTENT] || 'なし';
+    const responseContent = row[CONFIG.ISSUE.COLUMNS.RESPONSE_CONTENT] || 'なし';
+    const dueDate = row[CONFIG.ISSUE.COLUMNS.DUE_DATE] ? Utilities.formatDate(parseSheetDate(row[CONFIG.ISSUE.COLUMNS.DUE_DATE]), Session.getScriptTimeZone(), 'yyyy-MM-dd') : 'なし';
+    const status = String(row[CONFIG.ISSUE.COLUMNS.STATUS] || "").trim();
+    return `・No.${issueNo} 期日: ${dueDate} [結果: ${status}] \n 課題内容: ${issueContent}\n 対応内容: ${responseContent}`;
+  }).join('\n\n');
+
+  const messageForLog = `*【課題管理シート - 注意】未解決の課題があります！*\n\n${issueMessagesForLog}`;
+  Logger.log('--- 課題管理シート: 抽出された未解決課題 ---');
+  Logger.log(messageForLog);
+
+  const issueMessagesForSlack = extractedIssues.map(item => {
+    const rowData = item.row;
+    const rowIndex = item.rowIndex;
+
+    const link = `<${spreadsheetUrl}#gid=${sheetId}&range=A${rowIndex}|行:${rowIndex}>`;
+    
+    const issueNo = rowData[CONFIG.ISSUE.COLUMNS.NO] || 'なし';
+    const issueContent = rowData[CONFIG.ISSUE.COLUMNS.ISSUE_CONTENT] || 'なし';
+    const responseContent = rowData[CONFIG.ISSUE.COLUMNS.RESPONSE_CONTENT] || 'なし';
+    const dueDate = rowData[CONFIG.ISSUE.COLUMNS.DUE_DATE] ? Utilities.formatDate(parseSheetDate(rowData[CONFIG.ISSUE.COLUMNS.DUE_DATE]), Session.getScriptTimeZone(), 'yyyy-MM-dd') : 'なし';
+    const status = String(rowData[CONFIG.ISSUE.COLUMNS.STATUS] || "").trim();
+    
+    return `${link} 【No.${issueNo} 期日: ${dueDate} [結果: ${status}]】 \n 課題内容: ${issueContent}\n 対応内容: ${responseContent}`;
+  }).join('\n◼︎━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◼︎\n');
+
+  const messageForSlack = createSlackNotificationMessage(
+    "*【課題管理シート - 注意】未解決の課題があります！*",
+    "", 
+    [issueMessagesForSlack]
   );
   sendToSlack(messageForSlack);
 
