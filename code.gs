@@ -16,10 +16,10 @@ const CONFIG = {
     },
     STATUSES: {
       // WBSシート - 終了日超過タスクで除外するステータス
-      EXCLUDED_FOR_OVERDUE: ['終了', '対応不要', '延期'],
+      EXCLUDED_FOR_OVERDUE: ['完了', '対応不要'],
 
       // WBSシート - 今週開始タスクで対象とするステータス
-      TARGET_FOR_THIS_WEEK: ['未着手', '保留', '待機']
+      TARGET_FOR_THIS_WEEK: ['未着手', '保留']
     }
   },
 
@@ -31,7 +31,7 @@ const CONFIG = {
       NO: 0, ENTRY_DATE: 4, ASSIGNEE: 5, CONTENT: 6, DUE_DATE: 7, STATUS: 8
     },
     STATUSES: {
-      // TODO管理シート - 除外するステータス（「完了」のみ）
+      // TODO管理シート - 通知対象から除外するステータス（「完了」のみ）
       EXCLUDED: ['完了']
     }
   },
@@ -44,8 +44,8 @@ const CONFIG = {
       NO: 0, ISSUE_CONTENT: 6, RESPONSE_CONTENT: 7, DUE_DATE: 8, STATUS: 9
     },
     STATUSES: {
-      // 課題管理シート - 除外するステータス（「解決」のみ）
-      EXCLUDED: ['解決']
+      // 課題管理シート - 通知対象から除外するステータス（「完了」のみ）
+      EXCLUDED: ['完了']
     }
   }
 };
@@ -259,7 +259,7 @@ function processIssueSheet(sheet) {
   }
 
   if (extractedIssues.length === 0) {
-    Logger.log('課題管理シート: 未解決の課題はありませんでした。');
+    Logger.log('課題管理シート: 未完了の課題はありませんでした。');
     return;
   }
 
@@ -273,8 +273,8 @@ function processIssueSheet(sheet) {
     return `・No.${issueNo} 期日: ${dueDate} [結果: ${status}] \n 課題内容: ${issueContent}\n 対応内容: ${responseContent}`;
   }).join('\n\n');
 
-  const messageForLog = `*【課題管理シート - 注意】未解決の課題があります！*\n\n${issueMessagesForLog}`;
-  Logger.log('--- 課題管理シート: 抽出された未解決課題 ---');
+  const messageForLog = `*【課題管理シート - 注意】未完了の課題があります！*\n\n${issueMessagesForLog}`;
+  Logger.log('--- 課題管理シート: 抽出された未完了課題 ---');
   Logger.log(messageForLog);
 
   const issueMessagesForSlack = extractedIssues.map(item => {
@@ -293,7 +293,7 @@ function processIssueSheet(sheet) {
   }).join('\n◼︎━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◼︎\n');
 
   const messageForSlack = createSlackNotificationMessage(
-    "*【課題管理シート - 注意】未解決の課題があります！*",
+    "*【課題管理シート - 注意】未完了の課題があります！*",
     "", 
     [issueMessagesForSlack]
   );
