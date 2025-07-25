@@ -15,7 +15,7 @@ const CONFIG = {
       NO: 0, TASK_NAME: 3, START_DATE: 6, END_DATE: 7, STATUS: 8
     },
     STATUSES: {
-      // WBSシート - 終了日超過タスクで除外するステータス
+      // WBSシート - 終了日超過で通知対象から除外するステータス
       EXCLUDED_FOR_OVERDUE: ['完了', '対応不要'],
 
       // WBSシート - 今週開始タスクで対象とするステータス
@@ -31,8 +31,8 @@ const CONFIG = {
       NO: 0, ENTRY_DATE: 4, ASSIGNEE: 5, CONTENT: 6, DUE_DATE: 7, STATUS: 8
     },
     STATUSES: {
-      // TODO管理シート - 通知対象から除外するステータス（「完了」のみ）
-      EXCLUDED: ['完了']
+      // TODO管理シート - 通知対象から除外するステータス
+      EXCLUDED: ['完了', '対応不要']
     }
   },
 
@@ -44,8 +44,8 @@ const CONFIG = {
       NO: 0, ISSUE_CONTENT: 6, RESPONSE_CONTENT: 7, DUE_DATE: 8, STATUS: 9
     },
     STATUSES: {
-      // 課題管理シート - 通知対象から除外するステータス（「完了」のみ）
-      EXCLUDED: ['完了']
+      // 課題管理シート - 通知対象から除外するステータス
+      EXCLUDED: ['完了', '対応不要']
     }
   }
 };
