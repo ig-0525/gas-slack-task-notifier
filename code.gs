@@ -272,7 +272,7 @@ function processIssueSheet(sheet) {
     const responseContent = row[CONFIG.ISSUE.COLUMNS.RESPONSE_CONTENT] || 'なし';
     const dueDate = row[CONFIG.ISSUE.COLUMNS.DUE_DATE] ? Utilities.formatDate(parseSheetDate(row[CONFIG.ISSUE.COLUMNS.DUE_DATE]), Session.getScriptTimeZone(), 'yyyy-MM-dd') : 'なし';
     const status = String(row[CONFIG.ISSUE.COLUMNS.STATUS] || "").trim();
-    return `・No.${issueNo} 期日: ${dueDate} [結果: ${status}] \n 課題内容: ${issueContent}\n 対応内容: ${responseContent}`;
+    return `・No.${issueNo} 期日: ${dueDate} [ステータス: ${status}] \n 課題内容: ${issueContent}\n 対応内容: ${responseContent}`;
   }).join('\n\n');
 
   const messageForLog = `*【課題管理シート - 注意】未完了の課題があります！*\n\n${issueMessagesForLog}`;
@@ -291,7 +291,7 @@ function processIssueSheet(sheet) {
     const dueDate = rowData[CONFIG.ISSUE.COLUMNS.DUE_DATE] ? Utilities.formatDate(parseSheetDate(rowData[CONFIG.ISSUE.COLUMNS.DUE_DATE]), Session.getScriptTimeZone(), 'yyyy-MM-dd') : 'なし';
     const status = String(rowData[CONFIG.ISSUE.COLUMNS.STATUS] || "").trim();
     
-    return `${link} 【No.${issueNo} 期日: ${dueDate} [結果: ${status}]】 \n 課題内容: ${issueContent}\n 対応内容: ${responseContent}`;
+    return `${link} 【No.${issueNo} 期日: ${dueDate} [ステータス: ${status}]】 \n 課題内容: ${issueContent}\n 対応内容: ${responseContent}`;
   }).join('\n◼︎━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◼︎\n');
 
   const messageForSlack = createSlackNotificationMessage(
