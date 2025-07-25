@@ -186,7 +186,8 @@ function processTodoSheet(sheet) {
   }
 
   if (extractedTasks.length === 0) {
-    Logger.log('TODO管理シート: 未完了のTODOはありませんでした。素晴らしい！');
+    Logger.log('TODO管理シート: 未完了のTODOはありませんでした。');
+    sendToSlack('【TODO管理シート】未完了のTODOはありませんでした。素晴らしい！');
     return;
   }
 
@@ -260,6 +261,7 @@ function processIssueSheet(sheet) {
 
   if (extractedIssues.length === 0) {
     Logger.log('課題管理シート: 未完了の課題はありませんでした。');
+    sendToSlack('【課題管理シート】未完了の課題はありませんでした。素晴らしい！');
     return;
   }
 
