@@ -15,10 +15,9 @@ const CONFIG = {
       NO: 0, TASK_NAME: 3, START_DATE: 6, END_DATE: 7, STATUS: 8
     },
     STATUSES: {
-      // WBSシート - 終了日超過で通知対象から除外するステータス
-      EXCLUDED_FOR_OVERDUE: ['完了', '対応不要'],
-
-      // WBSシート - 今週開始タスクで対象とするステータス
+      // WBSシート - 終了日超過で通知対象とするステータス
+      TARGET_FOR_OVERDUE: ['未着手', '進行中', '保留'],
+      // WBSシート - 今週開始タスクで通知対象とするステータス
       TARGET_FOR_THIS_WEEK: ['未着手', '保留']
     }
   },
@@ -31,8 +30,8 @@ const CONFIG = {
       NO: 0, ENTRY_DATE: 4, ASSIGNEE: 5, CONTENT: 6, DUE_DATE: 7, STATUS: 8
     },
     STATUSES: {
-      // TODO管理シート - 通知対象から除外するステータス
-      EXCLUDED: ['完了', '対応不要']
+      // TODO管理シート - 終了日超過で通知対象とするステータス
+      TARGET_FOR_OVERDUE: ['未着手', '進行中', '保留'],
     }
   },
 
@@ -44,8 +43,8 @@ const CONFIG = {
       NO: 0, ISSUE_CONTENT: 6, RESPONSE_CONTENT: 7, DUE_DATE: 8, STATUS: 9
     },
     STATUSES: {
-      // 課題管理シート - 通知対象から除外するステータス
-      EXCLUDED: ['完了', '対応不要']
+      // 課題管理シート - 終了日超過で通知対象とするステータス
+      TARGET_FOR_OVERDUE: ['未着手', '進行中', '継続検討'],
     }
   }
 };
@@ -60,20 +59,29 @@ function checkTasksAndNotifySlack() {
     const todoSheet = spreadsheet.getSheetByName(CONFIG.TODO.SHEET_NAME);
     const issueSheet = spreadsheet.getSheetByName(CONFIG.ISSUE.SHEET_NAME);
 
+    // WBSシートの処理
     if (!wbsSheet) {
       Logger.log(`エラー: WBSシート '${CONFIG.WBS.SHEET_NAME}' が見つかりません。処理をスキップ。`);
     } else {
       processWBSSheet(wbsSheet);
     }
 
+    // TODO管理シートの処理
     if (!todoSheet) {
       Logger.log(`エラー: TODO管理シート '${CONFIG.TODO.SHEET_NAME}' が見つかりません。処理をスキップ。`);
+    } else if (todoSheet.getLastRow() < CONFIG.TODO.DATA_START_ROW) {
+      Logger.log(`${CONFIG.TODO.SHEET_NAME}: データ行が存在しないため、処理をスキップします。`);
+      sendToSlack(`【${CONFIG.TODO.SHEET_NAME}】期日超過のTODOはありませんでした。素晴らしい！`);
     } else {
       processTodoSheet(todoSheet);
     }
 
+    // 課題管理シートの処理
     if (!issueSheet) {
       Logger.log(`エラー: 課題管理シート '${CONFIG.ISSUE.SHEET_NAME}' が見つかりません。処理をスキップ。`);
+    } else if (issueSheet.getLastRow() < CONFIG.ISSUE.DATA_START_ROW) {
+      Logger.log(`${CONFIG.ISSUE.SHEET_NAME}: データ行が存在しないため、処理をスキップします。`);
+      sendToSlack(`【${CONFIG.ISSUE.SHEET_NAME}】期日超過の課題はありませんでした。素晴らしい！`);
     } else {
       processIssueSheet(issueSheet);
     }
@@ -92,18 +100,13 @@ function processWBSSheet(sheet) {
   
   const spreadsheetUrl = `https://docs.google.com/spreadsheets/d/${CONFIG.SPREADSHEET_ID}/edit`;
   const sheetId = sheet.getSheetId();
-
   const today = new Date(sheet.getRange('I1').getValue()); 
   today.setHours(0, 0, 0, 0);
 
-  const startOfThisWeek = getStartOfWeek(today);
-  const endOfThisWeek = new Date(startOfThisWeek);
-  endOfThisWeek.setDate(startOfThisWeek.getDate() + 4);
-  endOfThisWeek.setHours(23, 59, 59, 999);
+  const overdueTasksByStatus = {};
+  const thisWeekStartTasksByStatus = {};
 
   const allData = sheet.getDataRange().getValues().slice(CONFIG.WBS.DATA_START_ROW - 1);
-  const overdueTasks = [];
-  const thisWeekStartTasks = [];
 
   allData.forEach((row, index) => {
     const rowIndex = index + CONFIG.WBS.DATA_START_ROW;
@@ -111,51 +114,60 @@ function processWBSSheet(sheet) {
     if (!taskName) return;
 
     const link = `<${spreadsheetUrl}#gid=${sheetId}&range=A${rowIndex}|行:${rowIndex}>`;
-
     const taskNo = row[CONFIG.WBS.COLUMNS.NO] || 'なし';
     const status = String(row[CONFIG.WBS.COLUMNS.STATUS] || "").trim();
     const startDate = parseSheetDate(row[CONFIG.WBS.COLUMNS.START_DATE]);
     const endDate = parseSheetDate(row[CONFIG.WBS.COLUMNS.END_DATE]);
 
+    // 終了日超過タスクのチェック
     if (endDate && endDate.getTime() < today.getTime()) {
-      if (!CONFIG.WBS.STATUSES.EXCLUDED_FOR_OVERDUE.includes(status)) {
+      if (CONFIG.WBS.STATUSES.TARGET_FOR_OVERDUE.includes(status)) {
+        if (!overdueTasksByStatus[status]) overdueTasksByStatus[status] = [];
         const formattedEndDate = Utilities.formatDate(endDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-        overdueTasks.push(`・${link} No${taskNo} ${taskName} (終了日: ${formattedEndDate}) [ステータス: ${status}]`);
+        overdueTasksByStatus[status].push(`・${link} No.${taskNo} ${taskName} (終了日: ${formattedEndDate})`);
       }
     }
 
-    if (startDate && startDate.getTime() >= startOfThisWeek.getTime() && startDate.getTime() <= endOfThisWeek.getTime()) {
+    // 今週開始タスクのチェック
+    if (startDate && startDate.getTime() >= getStartOfWeek(today).getTime() && startDate.getTime() <= getEndOfThisWeek(today).getTime()) {
       if (CONFIG.WBS.STATUSES.TARGET_FOR_THIS_WEEK.includes(status)) {
+        if (!thisWeekStartTasksByStatus[status]) thisWeekStartTasksByStatus[status] = [];
         const formattedStartDate = Utilities.formatDate(startDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
-        thisWeekStartTasks.push(`・${link} No${taskNo} ${taskName} (開始日: ${formattedStartDate}) [ステータス: ${status}]`);
+        thisWeekStartTasksByStatus[status].push(`・${link} No.${taskNo} ${taskName} (開始日: ${formattedStartDate})`);
       }
     }
   });
 
-  if (overdueTasks.length > 0) {
-    const intro = `以下のタスクの終了日が ${Utilities.formatDate(today, Session.getScriptTimeZone(), 'yyyy/M/d')} より前です。`;
-    const messageForLog = `*【WBSシート - 注意】終了日が過ぎたタスクがあります！*\n\n${intro}\n\n${overdueTasks.join('\n').replace(/<[^>]+>/g, '')}`;
-    Logger.log('--- WBSシート: 終了日が過ぎたタスク ---');
-    Logger.log(messageForLog);
-    const messageForSlack = createSlackNotificationMessage("*【WBSシート - 注意】終了日が過ぎたタスクがあります！*", intro, overdueTasks);
-    sendToSlack(messageForSlack);
-  } else {
-    Logger.log('WBSシート: 終了日が過ぎたタスクはありませんでした。');
-    sendToSlack('【WBSシート】終了日が過ぎたタスクはありませんでした。素晴らしい！');
-  }
-
-  if (thisWeekStartTasks.length > 0) {
-    const intro = `以下のタスクが今週 (${Utilities.formatDate(startOfThisWeek, Session.getScriptTimeZone(), 'yyyy/M/d')} - ${Utilities.formatDate(endOfThisWeek, Session.getScriptTimeZone(), 'yyyy/M/d')}) 開始予定です。`;
-    const messageForLog = `*【WBSシート - お知らせ】今週開始のタスクです！*\n\n${intro}\n\n${thisWeekStartTasks.join('\n').replace(/<[^>]+>/g, '')}`;
-    Logger.log('--- WBSシート: 今週開始タスク ---');
-    Logger.log(messageForLog);
-    const messageForSlack = createSlackNotificationMessage("*【WBSシート - お知らせ】今週開始のタスクです！*", intro, thisWeekStartTasks);
-    sendToSlack(messageForSlack);
-  } else {
-    Logger.log('WBSシート: 今週開始のタスクはありませんでした。');
-  }
-
+  _notifyOverdueWbsTasks(overdueTasksByStatus, today);
+  _notifyThisWeekWbsTasks(thisWeekStartTasksByStatus, today);
+  
   Logger.log(`--- ${sheet.getName()} シートの処理が完了しました ---`);
+
+  // --- WBSシートの内部ヘルパー関数定義 ---
+  function _notifyOverdueWbsTasks(tasks, now) {
+    if (Object.keys(tasks).length === 0) {
+      Logger.log('WBSシート: 終了日が過ぎたタスクはありませんでした。');
+      sendToSlack('【WBSシート】終了日が過ぎたタスクはありませんでした。素晴らしい！');
+      return;
+    }
+    const intro = `以下のタスクの終了日が ${Utilities.formatDate(now, Session.getScriptTimeZone(), 'yyyy/M/d')} より前です。`;
+    const messageGroups = formatGroupedMessage(tasks, CONFIG.WBS.STATUSES.TARGET_FOR_OVERDUE);
+    const messageForSlack = createSlackNotificationMessage("*【WBSシート - 注意】終了日が過ぎたタスクがあります！*", intro, messageGroups);
+    sendToSlack(messageForSlack);
+  }
+
+  function _notifyThisWeekWbsTasks(tasks, now) {
+    if (Object.keys(tasks).length === 0) {
+      Logger.log('WBSシート: 今週開始のタスクはありませんでした。');
+      return;
+    }
+    const startOfThisWeek = getStartOfWeek(now);
+    const endOfThisWeek = getEndOfThisWeek(now);
+    const intro = `以下のタスクが今週 (${Utilities.formatDate(startOfThisWeek, Session.getScriptTimeZone(), 'yyyy/M/d')} - ${Utilities.formatDate(endOfThisWeek, Session.getScriptTimeZone(), 'yyyy/M/d')}) 開始予定です。`;
+    const messageGroups = formatGroupedMessage(tasks, CONFIG.WBS.STATUSES.TARGET_FOR_THIS_WEEK);
+    const messageForSlack = createSlackNotificationMessage("*【WBSシート - お知らせ】今週開始のタスクです！*", intro, messageGroups);
+    sendToSlack(messageForSlack);
+  }
 }
 
 /**
@@ -168,66 +180,40 @@ function processTodoSheet(sheet) {
   const spreadsheetUrl = `https://docs.google.com/spreadsheets/d/${CONFIG.SPREADSHEET_ID}/edit`;
   const sheetId = sheet.getSheetId();
   
-  const allData = sheet.getDataRange().getValues();
-  if (allData.length < CONFIG.TODO.DATA_START_ROW) {
-    Logger.log('TODO管理シート: 抽出するTODOが見つかりませんでした (データ行が少ない可能性があります)。');
-    return;
-  }
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
-  const extractedTasks = [];
-  for (let i = CONFIG.TODO.DATA_START_ROW - 1; i < allData.length; i++) {
-    const row = allData[i];
-    const entryValue = row[CONFIG.TODO.COLUMNS.ENTRY_DATE];
+  const overdueTasksByStatus = {};
+
+  const allData = sheet.getDataRange().getValues().slice(CONFIG.TODO.DATA_START_ROW - 1);
+
+  allData.forEach((row, index) => {
     const status = String(row[CONFIG.TODO.COLUMNS.STATUS] || "").trim();
+    const dueDate = parseSheetDate(row[CONFIG.TODO.COLUMNS.DUE_DATE]);
 
-    if (entryValue !== "" && !CONFIG.TODO.STATUSES.EXCLUDED.includes(status)) {
-      extractedTasks.push({ row: row, rowIndex: i + 1 });
+    // 期日超過、かつ対象ステータスのタスクを抽出
+    if (dueDate && dueDate.getTime() < today.getTime() && CONFIG.TODO.STATUSES.TARGET_FOR_OVERDUE.includes(status)) {
+      if (!overdueTasksByStatus[status]) overdueTasksByStatus[status] = [];
+      
+      const rowIndex = index + CONFIG.TODO.DATA_START_ROW;
+      const link = `<${spreadsheetUrl}#gid=${sheetId}&range=A${rowIndex}|行:${rowIndex}>`;
+      const todoNo = row[CONFIG.TODO.COLUMNS.NO] || 'なし';
+      const assignee = row[CONFIG.TODO.COLUMNS.ASSIGNEE] || 'なし';
+      const content = row[CONFIG.TODO.COLUMNS.CONTENT] || 'なし';
+      const formattedDueDate = Utilities.formatDate(dueDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+      
+      overdueTasksByStatus[status].push(`・${link} 【No.${todoNo} 対応者: ${assignee} 期日: ${formattedDueDate}】 \n 内容: ${content}`);
     }
+  });
+
+  if (Object.keys(overdueTasksByStatus).length > 0) {
+    const messageGroups = formatGroupedMessage(overdueTasksByStatus, CONFIG.TODO.STATUSES.TARGET_FOR_OVERDUE, '\n◼︎━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◼︎\n');
+    const messageForSlack = createSlackNotificationMessage("*【TODO管理シート - 注意】期日超過のTODOがあります！*", messageGroups);
+    sendToSlack(messageForSlack);
+  } else {
+    Logger.log('TODO管理シート: 期日超過のTODOはありませんでした。');
+    sendToSlack('【TODO管理シート】期日超過のTODOはありませんでした。素晴らしい！');
   }
-
-  if (extractedTasks.length === 0) {
-    Logger.log('TODO管理シート: 未完了のTODOはありませんでした。');
-    sendToSlack('【TODO管理シート】未完了のTODOはありませんでした。素晴らしい！');
-    return;
-  }
-
-  // ログ出力用のメッセージ（テキストリンク無し）
-  const todoMessagesForLog = extractedTasks.map(item => {
-    const row = item.row;
-    const todoNo = row[CONFIG.TODO.COLUMNS.NO] || 'なし';
-    const assignee = row[CONFIG.TODO.COLUMNS.ASSIGNEE] || 'なし';
-    const content = row[CONFIG.TODO.COLUMNS.CONTENT] || 'なし';
-    const dueDate = row[CONFIG.TODO.COLUMNS.DUE_DATE] ? Utilities.formatDate(parseSheetDate(row[CONFIG.TODO.COLUMNS.DUE_DATE]), Session.getScriptTimeZone(), 'yyyy-MM-dd') : 'なし';
-    const status = String(row[CONFIG.TODO.COLUMNS.STATUS] || "").trim();
-    return `・No.${todoNo} 対応者: ${assignee} 期日: ${dueDate} [ステータス: ${status}] \n 内容: ${content}`;
-  }).join('\n\n');
-
-  const messageForLog = `*【TODO管理シート - 注意】未完了のタスクがあります！*\n\n${todoMessagesForLog}`;
-  Logger.log('--- TODO管理シート: 抽出された未完了タスク ---');
-  Logger.log(messageForLog);
-
-  // Slack通知用のメッセージ（テキストリンク付きにする）
-  const todoMessagesForSlack = extractedTasks.map(item => {
-    const rowData = item.row;
-    const rowIndex = item.rowIndex;
-
-    const link = `<${spreadsheetUrl}#gid=${sheetId}&range=A${rowIndex}|行:${rowIndex}>`;
-    
-    const todoNo = rowData[CONFIG.TODO.COLUMNS.NO] || 'なし';
-    const assignee = rowData[CONFIG.TODO.COLUMNS.ASSIGNEE] || 'なし';
-    const content = rowData[CONFIG.TODO.COLUMNS.CONTENT] || 'なし';
-    const dueDate = rowData[CONFIG.TODO.COLUMNS.DUE_DATE] ? Utilities.formatDate(parseSheetDate(rowData[CONFIG.TODO.COLUMNS.DUE_DATE]), Session.getScriptTimeZone(), 'yyyy-MM-dd') : 'なし';
-    const status = String(rowData[CONFIG.TODO.COLUMNS.STATUS] || "").trim();
-    
-    return `${link} 【No.${todoNo} 対応者: ${assignee} 期日: ${dueDate} [ステータス: ${status}]】 \n 内容: ${content}`;
-  }).join('\n◼︎━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◼︎\n');
-
-  const messageForSlack = createSlackNotificationMessage(
-    "*【TODO管理シート - 注意】未完了のタスクがあります！*",
-    "", 
-    [todoMessagesForSlack]
-  );
-  sendToSlack(messageForSlack);
 
   Logger.log(`--- ${sheet.getName()} シートの処理が完了しました ---`);
 }
@@ -242,64 +228,40 @@ function processIssueSheet(sheet) {
   const spreadsheetUrl = `https://docs.google.com/spreadsheets/d/${CONFIG.SPREADSHEET_ID}/edit`;
   const sheetId = sheet.getSheetId();
   
-  const allData = sheet.getDataRange().getValues();
-  if (allData.length < CONFIG.ISSUE.DATA_START_ROW) {
-    Logger.log('課題管理シート: 抽出する課題が見つかりませんでした (データ行が少ない可能性があります)。');
-    return;
-  }
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
 
-  const extractedIssues = [];
-  for (let i = CONFIG.ISSUE.DATA_START_ROW - 1; i < allData.length; i++) {
-    const row = allData[i];
-    const issueContent = row[CONFIG.ISSUE.COLUMNS.ISSUE_CONTENT];
+  const overdueIssuesByStatus = {};
+
+  const allData = sheet.getDataRange().getValues().slice(CONFIG.ISSUE.DATA_START_ROW - 1);
+
+  allData.forEach((row, index) => {
     const status = String(row[CONFIG.ISSUE.COLUMNS.STATUS] || "").trim();
+    const dueDate = parseSheetDate(row[CONFIG.ISSUE.COLUMNS.DUE_DATE]);
 
-    if (issueContent !== "" && !CONFIG.ISSUE.STATUSES.EXCLUDED.includes(status)) {
-      extractedIssues.push({ row: row, rowIndex: i + 1 });
+    // 期日超過、かつ対象ステータスの課題を抽出
+    if (dueDate && dueDate.getTime() < today.getTime() && CONFIG.ISSUE.STATUSES.TARGET_FOR_OVERDUE.includes(status)) {
+      if (!overdueIssuesByStatus[status]) overdueIssuesByStatus[status] = [];
+      
+      const rowIndex = index + CONFIG.ISSUE.DATA_START_ROW;
+      const link = `<${spreadsheetUrl}#gid=${sheetId}&range=A${rowIndex}|行:${rowIndex}>`;
+      const issueNo = row[CONFIG.ISSUE.COLUMNS.NO] || 'なし';
+      const issueContent = row[CONFIG.ISSUE.COLUMNS.ISSUE_CONTENT] || 'なし';
+      const responseContent = row[CONFIG.ISSUE.COLUMNS.RESPONSE_CONTENT] || 'なし';
+      const formattedDueDate = Utilities.formatDate(dueDate, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+      
+      overdueIssuesByStatus[status].push(`・${link} 【No.${issueNo} 期日: ${formattedDueDate}】 \n 課題内容: ${issueContent}\n 対応内容: ${responseContent}`);
     }
+  });
+
+  if (Object.keys(overdueIssuesByStatus).length > 0) {
+    const messageGroups = formatGroupedMessage(overdueIssuesByStatus, CONFIG.ISSUE.STATUSES.TARGET_FOR_OVERDUE, '\n◼︎━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◼︎\n');
+    const messageForSlack = createSlackNotificationMessage("*【課題管理シート - 注意】期日超過の課題があります！*", messageGroups);
+    sendToSlack(messageForSlack);
+  } else {
+    Logger.log('課題管理シート: 期日超過の課題はありませんでした。');
+    sendToSlack('【課題管理シート】期日超過の課題はありませんでした。素晴らしい！');
   }
-
-  if (extractedIssues.length === 0) {
-    Logger.log('課題管理シート: 未完了の課題はありませんでした。');
-    sendToSlack('【課題管理シート】未完了の課題はありませんでした。素晴らしい！');
-    return;
-  }
-
-  const issueMessagesForLog = extractedIssues.map(item => {
-    const row = item.row;
-    const issueNo = row[CONFIG.ISSUE.COLUMNS.NO] || 'なし';
-    const issueContent = row[CONFIG.ISSUE.COLUMNS.ISSUE_CONTENT] || 'なし';
-    const responseContent = row[CONFIG.ISSUE.COLUMNS.RESPONSE_CONTENT] || 'なし';
-    const dueDate = row[CONFIG.ISSUE.COLUMNS.DUE_DATE] ? Utilities.formatDate(parseSheetDate(row[CONFIG.ISSUE.COLUMNS.DUE_DATE]), Session.getScriptTimeZone(), 'yyyy-MM-dd') : 'なし';
-    const status = String(row[CONFIG.ISSUE.COLUMNS.STATUS] || "").trim();
-    return `・No.${issueNo} 期日: ${dueDate} [ステータス: ${status}] \n 課題内容: ${issueContent}\n 対応内容: ${responseContent}`;
-  }).join('\n\n');
-
-  const messageForLog = `*【課題管理シート - 注意】未完了の課題があります！*\n\n${issueMessagesForLog}`;
-  Logger.log('--- 課題管理シート: 抽出された未完了課題 ---');
-  Logger.log(messageForLog);
-
-  const issueMessagesForSlack = extractedIssues.map(item => {
-    const rowData = item.row;
-    const rowIndex = item.rowIndex;
-
-    const link = `<${spreadsheetUrl}#gid=${sheetId}&range=A${rowIndex}|行:${rowIndex}>`;
-    
-    const issueNo = rowData[CONFIG.ISSUE.COLUMNS.NO] || 'なし';
-    const issueContent = rowData[CONFIG.ISSUE.COLUMNS.ISSUE_CONTENT] || 'なし';
-    const responseContent = rowData[CONFIG.ISSUE.COLUMNS.RESPONSE_CONTENT] || 'なし';
-    const dueDate = rowData[CONFIG.ISSUE.COLUMNS.DUE_DATE] ? Utilities.formatDate(parseSheetDate(rowData[CONFIG.ISSUE.COLUMNS.DUE_DATE]), Session.getScriptTimeZone(), 'yyyy-MM-dd') : 'なし';
-    const status = String(rowData[CONFIG.ISSUE.COLUMNS.STATUS] || "").trim();
-    
-    return `${link} 【No.${issueNo} 期日: ${dueDate} [ステータス: ${status}]】 \n 課題内容: ${issueContent}\n 対応内容: ${responseContent}`;
-  }).join('\n◼︎━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━◼︎\n');
-
-  const messageForSlack = createSlackNotificationMessage(
-    "*【課題管理シート - 注意】未完了の課題があります！*",
-    "", 
-    [issueMessagesForSlack]
-  );
-  sendToSlack(messageForSlack);
 
   Logger.log(`--- ${sheet.getName()} シートの処理が完了しました ---`);
 }
@@ -308,6 +270,17 @@ function processIssueSheet(sheet) {
 // ==================================================================
 // ヘルパー関数
 // ==================================================================
+
+function formatGroupedMessage(tasksByStatus, statusOrder, separator = '\n') {
+  const messageGroups = [];
+  for (const status of statusOrder) {
+    if (tasksByStatus[status] && tasksByStatus[status].length > 0) {
+      const tasksString = tasksByStatus[status].join(separator);
+      messageGroups.push(`\n▼ ${status}\n${tasksString}`);
+    }
+  }
+  return messageGroups;
+}
 
 function createSlackNotificationMessage(title, introduction, itemList) {
   let message = title;
@@ -329,10 +302,19 @@ function parseSheetDate(value) {
 function getStartOfWeek(date) {
   const d = new Date(date);
   const day = d.getDay();
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+  // 月曜始まりに調整 (day=0(日)の場合は-6、day=1(月)の場合は0、...day=6(土)の場合は-5)
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1); 
   d.setDate(diff);
   d.setHours(0, 0, 0, 0);
   return d;
+}
+
+function getEndOfThisWeek(date) {
+  const startOfThisWeek = getStartOfWeek(date);
+  const endOfThisWeek = new Date(startOfThisWeek);
+  endOfThisWeek.setDate(startOfThisWeek.getDate() + 4); // 月曜日から金曜日まで
+  endOfThisWeek.setHours(23, 59, 59, 999);
+  return endOfThisWeek;
 }
 
 function sendToSlack(message) {
